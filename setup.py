@@ -24,6 +24,7 @@ ABI_ALL = ['armeabi','armeabi-v7a','armeabi-v7a-hard','x86','mips','arm64-v8a','
 TAG_INI_CONF_MAIN = 'CONFIG'
 TAG_INI_MODULES = 'PACKAGES'
 TAG_INI_HOME_DIR = 'HOME_DIR'
+TAG_INI_REQUIREMENTS = 'REQUIREMENTS'
 
 TAG_BUILDSPEC_GRAMMAR_KEY_MODULES = 'MODULES'
 TAG_BUILDSPEC_GRAMMAR_KEYS_ALL = [
@@ -82,10 +83,17 @@ def get_ini_conf_string1(config, section, option):
     return config.get(section, option).strip()
 
 
+def get_ini_conf_strings_optional(config, section, option):
+    if not config.has_option(section, option):
+        return []
+    return get_ini_conf_strings(config, section, option)
+
+
 class PackageInfo:
-    def __init__(self, pkgname, home_dir):
+    def __init__(self, pkgname, home_dir, requirements):
         self.pkgname = pkgname
         self.home_dir = home_dir
+        self.requirements = requirements
 
 
 def load_packages_catalog():
@@ -99,7 +107,8 @@ def load_packages_catalog():
     for pkg in pkg_names:
         home_dir_ref = get_ini_conf_string1(config, pkg, TAG_INI_HOME_DIR)
         home_dir = os.path.normpath(os.path.join(home_dirs_prefix, home_dir_ref))
-        packages[pkg] = PackageInfo(pkg, home_dir)
+        requirements = get_ini_conf_strings_optional(config, pkg, TAG_INI_REQUIREMENTS)
+        packages[pkg] = PackageInfo(pkg, home_dir, requirements)
     print("::: loaded information about {} packages from '{}'.".format(len(packages), MODULES_CATALOG_FILE))
     return packages
 
@@ -295,6 +304,7 @@ def zip_rebuild_required(zipfilename, catalog, extra_depends):
 
 
 def build_zip_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
+    print("-------- BUILD ---------- '{}' ".format(mod_name))
     mod_obj_dir = os.path.join(DIR_OBJ, mod_name)
     if not os.path.isdir(mod_obj_dir):
         os.makedirs(mod_obj_dir)
@@ -315,6 +325,7 @@ def build_zip_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
 
 
 def build_ndk_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
+    print("-------- BUILD ---------- '{}' ".format(mod_name))
     if sys.platform == 'win32':
         ndk_executor = os.path.normpath(os.path.join(ndk_dir, 'build/ndk-build.cmd'))
     else:
@@ -344,6 +355,7 @@ def build_ndk_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
 
 
 def install_python_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
+    print("-------- INSTALL -------- '{}' ".format(mod_name))
     python_for_android = 'sources/python/{}.{}/shared'.format(sys.version_info[0], sys.version_info[1])
     python_dir_for_android = os.path.normpath(os.path.join(ndk_dir, python_for_android))
     mod_obj_dir = os.path.join(DIR_OBJ, mod_name)
@@ -383,7 +395,7 @@ def install_python_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
         shutil.copyfile(mod_file_src, target_file_path)
 
 
-def process_package(pkg, pkg_catalog, builders, ndk_dir, abis, do_build, do_install):
+def process_package(pkg, pkg_catalog, builders, ndk_dir, abis, seen_packages, do_build, do_install):
     print("::: processing package '{}' ...".format(pkg))
     if pkg not in pkg_catalog:
         raise BuildSystemException("Got unknown package name '{}'.".format(pkg))
@@ -393,18 +405,23 @@ def process_package(pkg, pkg_catalog, builders, ndk_dir, abis, do_build, do_inst
         raise BuildSystemException("Cannot find file with build specification '{}' while processing package '{}'.".format(build_spec_file, pkg))
     build_spec = load_build_spec(build_spec_file)
     modules = build_spec[TAG_BUILDSPEC_GRAMMAR_KEY_MODULES]
+    if pkg not in seen_packages:
+        seen_packages.append((pkg, modules))
     if not isinstance(modules, dict) or not modules:
         raise BuildSystemException("Got malformed build specification '{}' - token '{}' must be a non-empty dict.".format(build_spec_file, TAG_BUILDSPEC_GRAMMAR_KEY_MODULES))
-    mod_names = [x for x in modules.keys() ]
+    mod_names = [x for x in sorted(modules.keys()) ]
     for mod_name in mod_names:
         if not isinstance(modules[mod_name], dict):
             raise BuildSystemException("Got malformed build specification '{}' - module info '{}' must be a dict.".format(build_spec_file, mod_name))
         validate_module_spec(mod_name, build_spec_file, modules[mod_name])
 
-    print("::: got {} module(s) for package '{}': '{}'".format(len(mod_names), pkg, ",".join(mod_names)))
+    for required_pkg_name in pkg_info.requirements:
+        print("::: package '{}' is required due to '{}'".format(required_pkg_name, pkg))
+        process_package(required_pkg_name, pkg_catalog, builders, ndk_dir, abis, seen_packages, do_build, False)
+
+    print("::: got {} module(s) for package '{}': '{}'".format(len(mod_names), pkg, ", ".join(mod_names)))
     for mod_name in mod_names:
         print("::: processing module '{}' from package '{}' ...".format(mod_name, pkg))
-
         if do_build:
             mod_type = modules[mod_name][TAG_BUILDSPEC_MOD_TYPE]
             build_function = builders.get(mod_type)
@@ -414,6 +431,12 @@ def process_package(pkg, pkg_catalog, builders, ndk_dir, abis, do_build, do_inst
             build_function(mod_name, pkg_info, modules[mod_name], ndk_dir, abis)
 
         if do_install:
+            for required_pkg_name, requred_pkg_modules in seen_packages:
+                if required_pkg_name == pkg:
+                    continue
+                for required_mod_name in sorted(requred_pkg_modules.keys()):
+                    install_python_module(required_mod_name, pkg_info, requred_pkg_modules[required_mod_name], ndk_dir, abis)
+
             install_python_module(mod_name, pkg_info, modules[mod_name], ndk_dir, abis)
 
 
@@ -437,7 +460,9 @@ if __name__ == '__main__':
 
     try:
 
-        process_package(args.pkg[0], pkg_catalog, builders, ndk_dir, abis, args.build, args.install)
+        seen_packages = []
+        process_package(args.pkg[0], pkg_catalog, builders, ndk_dir, abis, seen_packages, args.build, args.install)
+        print("-------- DONE -----------")
 
     except BuildSystemException as exc:
         exit_code = exc.to_exit_code()
