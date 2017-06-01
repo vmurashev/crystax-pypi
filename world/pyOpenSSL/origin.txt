@@ -1,0 +1,1 @@
+https://pypi.python.org/packages/9f/32/80fe4fddeb731b7766cd09fe0b2032a91b43dae655e216792af2a6ae3190/pyOpenSSL-17.0.0.tar.gz#md5=0704ca95106960375cfe78259453094a
