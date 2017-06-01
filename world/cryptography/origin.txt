@@ -1,0 +1,1 @@
+https://pypi.python.org/packages/2a/0c/31bd69469e90035381f0197b48bf71032991d9f07a7e444c311b4a23a3df/cryptography-1.9.tar.gz#md5=1529f12fb403c9a0045277cb73df766c
