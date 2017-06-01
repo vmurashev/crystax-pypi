@@ -326,7 +326,7 @@ def build_ndk_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
     location = pkg_info.home_dir
     location_subdir = mod_info.get(TAG_BUILDSPEC_HOME_DIR)
     if isinstance(location_subdir, str) and location_subdir:
-        location = os.path.normpath(os.path.join(mod_home_dir, location_subdir))
+        location = os.path.normpath(os.path.join(pkg_info.home_dir, location_subdir))
     check_dir_object(location)
     build_script = os.path.join(location, 'Android.mk')
     check_file_object(build_script)
