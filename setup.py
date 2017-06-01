@@ -37,6 +37,7 @@ TAG_BUILDSPEC_TARGET_NAME = 'target-name'
 TAG_BUILDSPEC_ZIP_SPEC = 'zip-spec'
 TAG_BUILDSPEC_HOME_DIR = 'home-dir'
 TAG_BUILDSPEC_ZIP_PREFIX = 'prefix'
+TAG_BUILDSPEC_ZIP_EXPLICIT = 'explicit'
 TAG_BUILDSPEC_NDK_NAME = 'ndk-name'
 
 TAG_BUILDSPEC_MOD_TYPE_PYZIP = 'pyzip'
@@ -187,6 +188,20 @@ def validate_module_spec(mod_name, build_spec_file, mod_info):
                 raise BuildSystemException(
                     "Got malformed build specification '{}' - token '{}' is malformed for module '{}'.".format(
                         build_spec_file, TAG_BUILDSPEC_ZIP_SPEC, mod_name))
+            xpl = zip_spec_part.get(TAG_BUILDSPEC_ZIP_EXPLICIT)
+            if xpl is not None:
+                zip_xpl_good = True
+                if not isinstance(xpl, list) or not xpl:
+                    zip_xpl_good = False
+                if zip_xpl_good:
+                    for xpl_part in xpl:
+                        if not isinstance(xpl_part, str) or not xpl_part:
+                            zip_xpl_good = False
+                            break
+                if not zip_xpl_good:
+                    raise BuildSystemException(
+                        "Got malformed build specification '{}' - in token '{}', subtoken '{}' is malformed for module '{}'.".format(
+                            build_spec_file, TAG_BUILDSPEC_ZIP_SPEC, TAG_BUILDSPEC_ZIP_EXPLICIT, mod_name))
 
     elif mod_type == TAG_BUILDSPEC_MOD_TYPE_NDK_SO:
         ndk_name = mod_info.get(TAG_BUILDSPEC_NDK_NAME)
@@ -228,6 +243,28 @@ def enum_all_files(dname, prefix, catalog):
                 catalog.append((item_path, item_arcname, mt))
 
 
+def enum_all_files_explicit(home_dir, prefix, xpl, catalog):
+    for item in xpl:
+        item_path = os.path.normpath(os.path.join(home_dir, item))
+        check_file_object(item_path)
+        mt = os.path.getmtime(item_path)
+        location_and_name = item.rsplit('/', 1)
+        if len(location_and_name) == 2:
+            location, name = location_and_name[0], location_and_name[1]
+        else:
+            location, name = '', item
+        if prefix:
+            if location:
+                location = '/'.join([prefix, location])
+            else:
+                location = prefix
+        if location:
+            item_arcname = '/'.join([location, name])
+        else:
+            item_arcname = name
+        catalog.append((item_path, item_arcname, mt))
+
+
 def load_zip_module_catalog(mod_name, mod_home_dir, mod_info, catalog):
     for zip_spec_part in mod_info[TAG_BUILDSPEC_ZIP_SPEC]:
         location = mod_home_dir
@@ -236,13 +273,20 @@ def load_zip_module_catalog(mod_name, mod_home_dir, mod_info, catalog):
             location = os.path.normpath(os.path.join(mod_home_dir, location_subdir))
         check_dir_object(location)
         prefix = zip_spec_part.get(TAG_BUILDSPEC_ZIP_PREFIX, '')
-        enum_all_files(location, prefix, catalog)
+        xpl = zip_spec_part.get(TAG_BUILDSPEC_ZIP_EXPLICIT)
+        if xpl is None:
+            enum_all_files(location, prefix, catalog)
+        else:
+            enum_all_files_explicit(location, prefix, xpl, catalog)
 
 
-def zip_rebuild_required(zipfilename, catalog):
+def zip_rebuild_required(zipfilename, catalog, extra_depends):
     if not os.path.exists(zipfilename):
         return True
     zip_mtime = os.path.getmtime(zipfilename)
+    for dep in extra_depends:
+        if zip_mtime < os.path.getmtime(dep):
+            return True
     for entry in catalog:
         mt = entry[2]
         if zip_mtime < mt:
@@ -258,7 +302,8 @@ def build_zip_module(mod_name, pkg_info, mod_info, ndk_dir, abis):
     zipfilepath = os.path.join(mod_obj_dir, zipfilename)
     catalog = []
     load_zip_module_catalog(mod_name, pkg_info.home_dir, mod_info, catalog)
-    if not zip_rebuild_required(zipfilepath, catalog):
+    extra_depends = [ os.path.join(pkg_info.home_dir, BUILD_SPEC_FNAME) ]
+    if not zip_rebuild_required(zipfilepath, catalog, extra_depends):
         print("::: python zip package '{}' is up-to-date.".format(zipfilepath))
         return
     print("::: compiling python zip package '{}' ...".format(zipfilepath))
